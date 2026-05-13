@@ -7,7 +7,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use indicatif::ProgressBar;
+use indicatif::{MultiProgress, ProgressBar};
 
 #[derive(Clone)]
 struct Config {
@@ -57,7 +57,13 @@ ouptut folder is optional, if not set then a new folder will be created next to 
         })
         .collect();
     let notebook_count = notebooks.len();
-    let prog = Arc::new(Mutex::new(ProgressBar::new(notebook_count as u64)));
+
+    let bars = Arc::new(Mutex::new(MultiProgress::new()));
+    let bar = Arc::new(Mutex::new(
+        bars.lock()
+            .unwrap()
+            .add(ProgressBar::new(notebook_count as u64)),
+    ));
 
     // Receivers and senders for sharing jobs between threads
     let (sender, receiver) = mpsc::channel::<DirEntry>();
@@ -71,18 +77,23 @@ ouptut folder is optional, if not set then a new folder will be created next to 
         .map(|i| {
             let config = config.clone();
             let receiver = Arc::clone(&receiver);
-            let prog = Arc::clone(&prog);
+            let bars = Arc::clone(&bars);
+            let bar = Arc::clone(&bar);
             thread::spawn(move || {
                 loop {
                     let job = receiver.lock().unwrap().recv();
                     match job {
                         Ok(dir) => {
-                            prog.lock().unwrap().inc(1);
-                            println!(
-                                "worker {i} working on {}",
-                                dir.file_name().to_str().unwrap()
-                            );
+                            bars.lock()
+                                .unwrap()
+                                .println(format!(
+                                    "worker {i} working on {}",
+                                    dir.file_name().to_str().unwrap()
+                                ))
+                                .unwrap();
+
                             convert_to_pdf(dir, &config);
+                            bar.lock().unwrap().inc(1);
                         }
                         Err(_) => {
                             println!("worker {i} stopping");
@@ -130,10 +141,10 @@ fn convert_to_pdf(dir: DirEntry, config: &Config) {
                 .to_str()
                 .unwrap(),
         ])
+        .stderr(Stdio::null())
         .stdout(Stdio::null())
         .status()
         .expect("Couldn't convert to epub!");
-    println!("Converted to epub");
 
     // Convert EPUB to PDF
     Command::new("ebook-convert")
@@ -159,6 +170,7 @@ fn convert_to_pdf(dir: DirEntry, config: &Config) {
             "--pdf-page-margin-bottom",
             "0",
         ])
+        .stderr(Stdio::null())
         .stdout(Stdio::null())
         .status()
         .expect("Couldn't convert to pdf!");
