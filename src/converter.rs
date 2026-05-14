@@ -1,6 +1,7 @@
 use indicatif::MultiProgress;
 
 use crate::Config;
+use sha2::{Digest, Sha256};
 use std::{
     fs::{self, DirEntry},
     process::{Command, Stdio},
@@ -8,13 +9,37 @@ use std::{
     thread,
 };
 
-pub(crate) fn convert_to_pdf(dir: DirEntry, config: &Config, bars: &Arc<Mutex<MultiProgress>>) {
+pub(crate) fn convert_to_pdf(dir: DirEntry, config: &Config, term_out: &Arc<Mutex<MultiProgress>>) {
+    const HASH_NAME: &str = ".hash.sha256";
     const EPUB_NAME: &str = "notebook.epub";
     const PDF_NAME: &str = "notebook.pdf";
-
     let name = dir.file_name().into_string().unwrap();
-    // Output folder
-    fs::create_dir(config.output_dir.join(&name)).expect("Couldn't create notebook output folder!");
+
+    // Create output directory if it doesn't already exist
+    fs::create_dir(config.output_dir.join(&name)).ok();
+
+    // Create hash of notebook file to check if is has been converted previously
+    let hash = hex::encode(Sha256::digest(
+        fs::read(config.notebook_dir.join(&name).join("nbk")).unwrap(),
+    ));
+
+    // Check if hash of the file to be converted is the same as the saved hash, if so the skip
+    if let Ok(saved_hash) = fs::read_to_string(config.output_dir.join(&name).join(HASH_NAME))
+        && saved_hash == hash
+    {
+        // Hash has not changed, no need to convert again
+        term_out
+            .lock()
+            .unwrap()
+            .println(format!("{} is already up to date, skipping", name))
+            .unwrap();
+        return;
+    } else {
+        // Remove all old files in output directory
+        fs::read_dir(config.output_dir.join(&name))
+            .unwrap()
+            .for_each(|file| fs::remove_file(file.unwrap().path()).unwrap());
+    }
 
     // Convert notebook to EPUB using calibre and the KFX Input plugin
     let mut attempts = 3;
@@ -48,7 +73,8 @@ pub(crate) fn convert_to_pdf(dir: DirEntry, config: &Config, bars: &Arc<Mutex<Mu
             Ok(proc) => proc,
             Err(e) => {
                 // If spawning fails, try again
-                bars.lock()
+                term_out
+                    .lock()
                     .unwrap()
                     .println(format!(
                         "Error in spawning calibre process for {name}! \n Error: \n{e}"
@@ -67,7 +93,8 @@ pub(crate) fn convert_to_pdf(dir: DirEntry, config: &Config, bars: &Arc<Mutex<Mu
             success = true;
         } else {
             attempts -= 1;
-            bars.lock()
+            term_out
+                .lock()
                 .unwrap()
                 .println(format!(
                     "Error in converting {name} to epub! \n Error: \n{}",
@@ -125,7 +152,8 @@ pub(crate) fn convert_to_pdf(dir: DirEntry, config: &Config, bars: &Arc<Mutex<Mu
             Ok(proc) => proc,
             Err(e) => {
                 // If spawning fails, try again
-                bars.lock()
+                term_out
+                    .lock()
                     .unwrap()
                     .println(format!(
                         "Error in spawning ebook-convert process for {name}! \n Error: \n{e}"
@@ -145,9 +173,19 @@ pub(crate) fn convert_to_pdf(dir: DirEntry, config: &Config, bars: &Arc<Mutex<Mu
             // Remove EPUB file since no longer needed
             fs::remove_file(config.output_dir.join(&name).join(EPUB_NAME).as_path())
                 .expect("Couldn't remove the epub file!");
+
+            // Save new hash
+            if let Err(e) = fs::write(config.output_dir.join(&name).join(HASH_NAME), &hash) {
+                term_out
+                    .lock()
+                    .unwrap()
+                    .println(format!("Couldn't save hash for {name}! \nError: {e}"))
+                    .unwrap();
+            }
         } else {
             attempts -= 1;
-            bars.lock()
+            term_out
+                .lock()
                 .unwrap()
                 .println(format!(
                     "Error in converting {name} to pdf! \n Error: \n{}",

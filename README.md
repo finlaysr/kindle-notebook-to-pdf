@@ -2,7 +2,8 @@
 
 Convert kindle scribe notebook `nbk` files to PDFs.
 
-Uses the Calibre KFX plugin to convert to each notebook to an EPUB, then converts each EPUB to a PDF
+Uses the Calibre KFX plugin to convert to each notebook to an EPUB, then converts each EPUB to a PDF.
+Also tracks changes to the original notebook so it is only reconverted if it differs to the last time it was converted.
 
 ## Requirements
 
@@ -22,11 +23,11 @@ Uses the Calibre KFX plugin to convert to each notebook to an EPUB, then convert
       ├── 0aa30f71-67fb-f88e-6324-13a9273197a2
       ...
   ```
-* To convert all the notebooks to pdfs, run:
+* To convert all the notebooks to PDFs, run:
   ```
   cargo run -- path/to/example_folder/.notebooks
   ```
-* This will convert all the notebook files to pdf, storing the ouptut in a newly create `output` folder
+* This will convert all the notebook files to PDFs, storing the ouptut in a newly create `output` folder
   ```
   example_folder
   ├── .notebooks
@@ -45,3 +46,4 @@ Uses the Calibre KFX plugin to convert to each notebook to an EPUB, then convert
   ```
   cargo run -- path/to/example_folder/.notebooks  path/to/output
   ```
+* A `hash.sha256` file is also generated next to each output PDF, this tracks changes to the original notebook file, so it is only re-converted if neccesary

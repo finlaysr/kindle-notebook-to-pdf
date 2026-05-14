@@ -17,33 +17,7 @@ struct Config {
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    dbg!(&args);
-    let config: Config = match args.len() {
-        ..=1 | 4.. => {
-            panic!(
-                "Arguments Required:
-<.notebooks folder> [output folder]
-ouptut folder is optional, if not set then a new folder will be created next to .notebook",
-            );
-        }
-        2 => {
-            let config = Config {
-                notebook_dir: PathBuf::from(&args[1]),
-                output_dir: PathBuf::from(&args[1]).parent().unwrap().join("output"),
-            };
-            if fs::exists(&config.output_dir).unwrap() {
-                fs::remove_dir_all(&config.output_dir)
-                    .expect("Couldn't remove exisitng output directory");
-            }
-            fs::create_dir(&config.output_dir).expect("Couldn't create output directory");
-            config
-        }
-        3 => Config {
-            notebook_dir: PathBuf::from(&args[1]),
-            output_dir: PathBuf::from(&args[2]),
-        },
-    };
+    let config = get_config();
 
     // Array of all notebooks to be converted
     let notebooks: Vec<DirEntry> = fs::read_dir(&config.notebook_dir)
@@ -59,9 +33,10 @@ ouptut folder is optional, if not set then a new folder will be created next to 
         .collect();
     let notebook_count = notebooks.len();
 
-    let bars = Arc::new(Mutex::new(MultiProgress::new()));
+    let term_out = Arc::new(Mutex::new(MultiProgress::new()));
     let bar = Arc::new(Mutex::new(
-        bars.lock()
+        term_out
+            .lock()
             .unwrap()
             .add(ProgressBar::new(notebook_count as u64)),
     ));
@@ -70,7 +45,7 @@ ouptut folder is optional, if not set then a new folder will be created next to 
     let (sender, receiver) = mpsc::channel::<DirEntry>();
     let receiver = Arc::new(Mutex::new(receiver));
     let threads = std::thread::available_parallelism().unwrap().get() / 2; // Don't kill it with too many threads
-    dbg!(threads);
+    println!("Using {} threads", threads);
 
     // Set up threads
     bar.lock().unwrap().inc(0);
@@ -78,14 +53,15 @@ ouptut folder is optional, if not set then a new folder will be created next to 
         .map(|i| {
             let config = config.clone();
             let receiver = Arc::clone(&receiver);
-            let bars = Arc::clone(&bars);
+            let term_out = Arc::clone(&term_out);
             let bar = Arc::clone(&bar);
             thread::spawn(move || {
                 loop {
                     let job = receiver.lock().unwrap().recv();
                     match job {
                         Ok(dir) => {
-                            bars.lock()
+                            term_out
+                                .lock()
                                 .unwrap()
                                 .println(format!(
                                     "worker {i:<2} working on {}",
@@ -93,11 +69,12 @@ ouptut folder is optional, if not set then a new folder will be created next to 
                                 ))
                                 .unwrap();
 
-                            converter::convert_to_pdf(dir, &config, &bars);
+                            converter::convert_to_pdf(dir, &config, &term_out);
                             bar.lock().unwrap().inc(1);
                         }
                         Err(_) => {
-                            bars.lock()
+                            term_out
+                                .lock()
                                 .unwrap()
                                 .println(format!("worker {i} stopping"))
                                 .unwrap();
@@ -121,4 +98,31 @@ ouptut folder is optional, if not set then a new folder will be created next to 
     handles.into_iter().for_each(|h| {
         h.join().expect("worker thread panicked");
     });
+}
+
+fn get_config() -> Config {
+    let args: Vec<String> = env::args().collect();
+    let config: Config = match args.len() {
+        ..=1 | 4.. => {
+            panic!(
+                "Arguments Required:
+<.notebooks folder> [output folder]
+ouptut folder is optional, if not set then a new folder will be created next to .notebook",
+            );
+        }
+        2 => {
+            let config = Config {
+                notebook_dir: PathBuf::from(&args[1]),
+                output_dir: PathBuf::from(&args[1]).parent().unwrap().join("output"),
+            };
+
+            fs::create_dir(&config.output_dir).ok(); // Create output_dir if doesn't exist
+            config
+        }
+        3 => Config {
+            notebook_dir: PathBuf::from(&args[1]),
+            output_dir: PathBuf::from(&args[2]),
+        },
+    };
+    config
 }
