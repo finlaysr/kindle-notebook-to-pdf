@@ -2,10 +2,11 @@ use std::{
     env,
     fs::{self, DirEntry},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
 };
+
+mod converter;
 
 use indicatif::{MultiProgress, ProgressBar};
 
@@ -68,11 +69,11 @@ ouptut folder is optional, if not set then a new folder will be created next to 
     // Receivers and senders for sharing jobs between threads
     let (sender, receiver) = mpsc::channel::<DirEntry>();
     let receiver = Arc::new(Mutex::new(receiver));
-    let threads = std::thread::available_parallelism().unwrap().get();
+    let threads = std::thread::available_parallelism().unwrap().get() / 2; // Don't kill it with too many threads
     dbg!(threads);
 
     // Set up threads
-
+    bar.lock().unwrap().inc(0);
     let handles: Vec<JoinHandle<()>> = (1..=threads)
         .map(|i| {
             let config = config.clone();
@@ -87,16 +88,19 @@ ouptut folder is optional, if not set then a new folder will be created next to 
                             bars.lock()
                                 .unwrap()
                                 .println(format!(
-                                    "worker {i} working on {}",
+                                    "worker {i:<2} working on {}",
                                     dir.file_name().to_str().unwrap()
                                 ))
                                 .unwrap();
 
-                            convert_to_pdf(dir, &config);
+                            converter::convert_to_pdf(dir, &config, &bars);
                             bar.lock().unwrap().inc(1);
                         }
                         Err(_) => {
-                            println!("worker {i} stopping");
+                            bars.lock()
+                                .unwrap()
+                                .println(format!("worker {i} stopping"))
+                                .unwrap();
                             break;
                         }
                     }
@@ -110,72 +114,11 @@ ouptut folder is optional, if not set then a new folder will be created next to 
         sender.send(nb).unwrap();
     });
 
+    // Close sender
+    drop(sender);
+
     // ensure all threads have finished
     handles.into_iter().for_each(|h| {
         h.join().expect("worker thread panicked");
     });
-
-    // Close sender
-    drop(sender);
-}
-
-fn convert_to_pdf(dir: DirEntry, config: &Config) {
-    const EPUB_NAME: &str = "notebook.epub";
-    const PDF_NAME: &str = "notebook.pdf";
-
-    let name = dir.file_name().into_string().unwrap();
-    // Output folder
-    fs::create_dir(config.output_dir.join(&name)).expect("Couldn't create notebook output folder!");
-
-    // Convert notebook to EPUB using calibre and the KFX Input plugin
-    Command::new("calibre-debug")
-        .args([
-            "-r",
-            "KFX Input",
-            "--",
-            config.notebook_dir.join(&name).to_str().unwrap(),
-            config
-                .output_dir
-                .join(&name)
-                .join(EPUB_NAME)
-                .to_str()
-                .unwrap(),
-        ])
-        .stderr(Stdio::null())
-        .stdout(Stdio::null())
-        .status()
-        .expect("Couldn't convert to epub!");
-
-    // Convert EPUB to PDF
-    Command::new("ebook-convert")
-        .args([
-            config
-                .output_dir
-                .join(&name)
-                .join(EPUB_NAME)
-                .to_str()
-                .unwrap(),
-            config
-                .output_dir
-                .join(&name)
-                .join(PDF_NAME)
-                .to_str()
-                .unwrap(),
-            "--pdf-page-margin-top",
-            "0",
-            "--pdf-page-margin-left",
-            "0",
-            "--pdf-page-margin-right",
-            "0",
-            "--pdf-page-margin-bottom",
-            "0",
-        ])
-        .stderr(Stdio::null())
-        .stdout(Stdio::null())
-        .status()
-        .expect("Couldn't convert to pdf!");
-
-    // Remove EPUB file since no longer needed
-    fs::remove_file(config.output_dir.join(&name).join(EPUB_NAME).as_path())
-        .expect("Couldn't remove the epub file!");
 }
